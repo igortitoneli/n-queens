@@ -105,6 +105,32 @@ def encontrar_conflito(
     return None
 
 
+# --------------------------------------------------------------- estratégias
+
+
+ESTRATEGIAS: dict[str, str] = {
+    "crescente": "colunas testadas de 0 a n-1 (esquerda -> direita)",
+    "decrescente": "colunas testadas de n-1 a 0 (direita -> esquerda)",
+}
+
+
+def ordem_colunas(n: int, estrategia: str = "crescente") -> list[int]:
+    """Ordem em que as colunas de cada linha são testadas.
+
+    A estratégia não muda o algoritmo — só a ordem de exploração. Como o
+    backtracking para na primeira solução, ordens diferentes chegam a
+    soluções diferentes e com um número diferente de retrocessos.
+    """
+    if estrategia not in ESTRATEGIAS:
+        raise ValueError(
+            f"estratégia desconhecida: {estrategia!r} "
+            f"(use uma de {', '.join(ESTRATEGIAS)})"
+        )
+    if estrategia == "decrescente":
+        return list(range(n - 1, -1, -1))
+    return list(range(n))
+
+
 # -------------------------------------------------------------------- tempo
 
 
@@ -135,10 +161,17 @@ class Cores:
 class Traco:
     """Imprime o processo de comparação e contabiliza as estatísticas."""
 
-    def __init__(self, n: int, cores: Cores, mostrar_tabuleiro: bool = False):
+    def __init__(
+        self,
+        n: int,
+        cores: Cores,
+        mostrar_tabuleiro: bool = False,
+        estrategia: str = "crescente",
+    ):
         self.n = n
         self.c = cores
         self.mostrar_tabuleiro = mostrar_tabuleiro
+        self.estrategia = estrategia
         self.passo = 0
         self.tentativas = 0
         self.conflitos = 0
@@ -149,7 +182,11 @@ class Traco:
         return f"{self.c.fraco}[{self.passo:04d}]{self.c.reset} linha {linha}"
 
     def cabecalho(self) -> None:
-        print(f"{self.c.destaque}Backtracking para n = {self.n}{self.c.reset}")
+        print(
+            f"{self.c.destaque}Backtracking para n = {self.n}{self.c.reset}  "
+            f"{self.c.fraco}estratégia {self.estrategia}: "
+            f"{ESTRATEGIAS[self.estrategia]}{self.c.reset}"
+        )
         print(f"{self.c.fraco}{'-' * 64}{self.c.reset}")
 
     def aceita(
@@ -178,14 +215,18 @@ class Traco:
         )
 
     def retrocede(
-        self, linha: int, removida: tuple[int, int], proxima_col: int
+        self, linha: int, removida: tuple[int, int], proxima_col: int | None
     ) -> None:
         self.backtracks += 1
+        retomada = (
+            f"linha {linha - 1} volta a testar na col {proxima_col}"
+            if proxima_col is not None
+            else f"linha {linha - 1} também esgotou as colunas"
+        )
         print(
             f"{self._prefixo(linha)}  colunas esgotadas  "
             f"{self.c.backtrack}<<< BACKTRACK{self.c.reset}  "
-            f"{self.c.backtrack}desempilha {removida}{self.c.reset}; "
-            f"linha {linha - 1} volta a testar a partir da col {proxima_col}"
+            f"{self.c.backtrack}desempilha {removida}{self.c.reset}; {retomada}"
         )
 
     def sem_solucao(self) -> None:
@@ -217,18 +258,22 @@ class Traco:
 
 
 def resolver(
-    n: int, traco: "Traco | None" = None
+    n: int, traco: "Traco | None" = None, estrategia: str = "crescente"
 ) -> tuple[ListaEncadeada | None, float]:
     """Backtracking iterativo: uma rainha por linha, pilha = lista encadeada.
 
+    `estrategia` escolhe a ordem de teste das colunas (ver `ESTRATEGIAS`).
     Devolve `(solução, segundos)`; a solução é `None` se não existir.
     Passe um `Traco` para imprimir cada comparação e cada retrocesso — nesse
     caso o tempo medido inclui o custo de imprimir o traço.
     """
     rainhas = ListaEncadeada()
 
-    # próxima coluna a testar em cada linha
-    proxima_col: list[int] = [0] * n
+    # ordem[i] = i-ésima coluna a testar, segundo a estratégia escolhida
+    ordem = ordem_colunas(n, estrategia)
+
+    # índice, dentro de `ordem`, da próxima coluna a testar em cada linha
+    proximo_idx: list[int] = [0] * n
 
     if traco:
         traco.cabecalho()
@@ -237,10 +282,10 @@ def resolver(
 
     while len(rainhas) < n:
         linha = len(rainhas)
-        col = proxima_col[linha]
+        idx = proximo_idx[linha]
 
-        if col >= n:  # esgotou as colunas desta linha -> retrocede
-            proxima_col[linha] = 0
+        if idx >= n:  # esgotou as colunas desta linha -> retrocede
+            proximo_idx[linha] = 0
             if linha == 0:
                 decorrido = time.perf_counter() - inicio
                 if traco:
@@ -248,12 +293,17 @@ def resolver(
                     traco.resumo(resolvido=False, decorrido=decorrido)
                 return None, decorrido  # não existe solução
             removida = rainhas.pop()
-            proxima_col[len(rainhas)] += 1
+            proximo_idx[len(rainhas)] += 1
             if traco:
-                traco.retrocede(linha, removida, proxima_col[len(rainhas)])
+                idx_anterior = proximo_idx[len(rainhas)]
+                traco.retrocede(
+                    linha,
+                    removida,
+                    ordem[idx_anterior] if idx_anterior < n else None,
+                )
             continue
 
-        pos = (col, linha)
+        pos = (ordem[idx], linha)
         conflito = encontrar_conflito(rainhas, pos) if traco else None
 
         if verificar_posicao_valida(rainhas, pos):
@@ -261,7 +311,7 @@ def resolver(
             if traco:
                 traco.aceita(pos, rainhas)
         else:
-            proxima_col[linha] += 1
+            proximo_idx[linha] += 1
             if traco and conflito:
                 traco.rejeita(pos, *conflito)
 
@@ -273,9 +323,11 @@ def resolver(
     return rainhas, decorrido
 
 
-def sol(n: int, traco: "Traco | None" = None) -> ListaEncadeada | None:
+def sol(
+    n: int, traco: "Traco | None" = None, estrategia: str = "crescente"
+) -> ListaEncadeada | None:
     """`resolver` sem o cronômetro: devolve só a solução (ou `None`)."""
-    return resolver(n, traco)[0]
+    return resolver(n, traco, estrategia)[0]
 
 
 def imprimir_tabuleiro(rainhas: ListaEncadeada, n: int, indent: str = "") -> None:
@@ -304,6 +356,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="com --traco, desenha o tabuleiro a cada rainha empilhada",
     )
+    parser.add_argument(
+        "-e",
+        "--estrategia",
+        choices=list(ESTRATEGIAS),
+        default="crescente",
+        help="ordem de teste das colunas (padrão: crescente)",
+    )
     parser.add_argument("--sem-cor", action="store_true", help="desliga as cores ANSI")
     args = parser.parse_args(argv)
 
@@ -311,17 +370,20 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("n deve ser >= 1")
 
     cores = Cores(ativo=not args.sem_cor and sys.stdout.isatty())
-    traco = Traco(args.n, cores, args.tabuleiro) if args.traco else None
+    traco = (
+        Traco(args.n, cores, args.tabuleiro, args.estrategia) if args.traco else None
+    )
 
-    resultado, decorrido = resolver(args.n, traco)
+    resultado, decorrido = resolver(args.n, traco, args.estrategia)
     rotulo = "tempo de busca" if traco is None else "tempo de busca + traço"
+    tempo = f"estratégia: {args.estrategia} | {rotulo}: {formatar_tempo(decorrido)}"
 
     if resultado is None:
-        print(f"Sem solução para n = {args.n}  ({rotulo}: {formatar_tempo(decorrido)})")
+        print(f"Sem solução para n = {args.n}  ({tempo})")
         return 1
 
     print(resultado)
-    print(f"{rotulo}: {formatar_tempo(decorrido)}")
+    print(tempo)
     print()
     imprimir_tabuleiro(resultado, args.n)
     return 0
